@@ -1,0 +1,271 @@
+#!/usr/bin/env python3
+import copy
+import json
+import os
+from argparse import ArgumentParser
+from collections import OrderedDict
+from zipfile import ZipFile
+import logging
+from pprint import pformat
+import random
+from textwrap import TextWrapper
+
+import torch
+from torch.nn.parallel import DataParallel, DistributedDataParallel
+from pytorch_transformers import GPT2DoubleHeadsModel, GPT2Tokenizer, AdamW
+
+from mldc.util import NLGEvalOutput
+from mldc.data.schema import PartitionSpec
+
+import grtr.env_utils as env_utils
+from grtr.utils import (load_metalwoz_dialogues,
+                        download_pretrained_model,
+                        get_loader_for_dataset,
+                        SPECIAL_TOKENS,
+                        generate_and_rank)
+from grtr.train import train
+
+
+def split_dataset(in_dataset, in_dev_ratio):
+    random.shuffle(in_dataset)
+    train_dialogues_num = int(len(in_dataset) * (1.0 - in_dev_ratio))
+    return in_dataset[:train_dialogues_num], in_dataset[train_dialogues_num:]
+
+
+def print_prediction(in_dialogue, in_pred_ids, in_tokenizer, in_pred_turn_num, nlgeval):
+    ctxwrap = TextWrapper(130, initial_indent='- ', subsequent_indent=' ' * len('- '))
+    print("--------------------", in_dialogue['id'], "-----------------")
+    # target batch size is always 1 if spec file is used
+    for inp_idx, turn in enumerate(in_dialogue['turns'][:in_pred_turn_num]):
+        party = ("Wizard", "User  ")[inp_idx % 2]
+        print(ctxwrap.fill(("INPUT     %s: " % party) + in_tokenizer.decode(turn, skip_special_tokens=True)))
+    target_turn = in_dialogue['turns'][in_pred_turn_num]
+    target_text = in_tokenizer.decode(target_turn, skip_special_tokens=True)
+    print(ctxwrap.fill("  TARGET: " + target_text))
+
+    pred_text = in_tokenizer.decode(in_pred_ids, skip_special_tokens=True)
+    print(ctxwrap.fill("  PRED:   " + pred_text))
+    nlgeval.add(target_text,
+                pred_text,
+                dlg_id=in_dialogue['id'],
+                predict_turn=in_pred_turn_num)
+
+
+def fine_tune(in_model, in_tokenizer, in_optimizer, in_support_set, in_args, amp=None):
+    trainset, validset = split_dataset(in_support_set, in_args.support_dev_ratio)
+
+    trn_loader, trn_sampler = get_loader_for_dataset(trainset,
+                                                     in_tokenizer,
+                                                     in_args.max_history,
+                                                     in_args.num_candidates,
+                                                     in_args.train_batch_size,
+                                                     in_args.dataloader_num_workers,
+                                                     in_args.distributed,
+                                                     max_samples=in_args.train_batches_per_epoch * in_args.train_batch_size)
+    val_loader, val_sampler = get_loader_for_dataset(validset,
+                                                     in_tokenizer,
+                                                     in_args.max_history,
+                                                     in_args.num_candidates,
+                                                     in_args.valid_batch_size,
+                                                     in_args.dataloader_num_workers,
+                                                     in_args.distributed,
+                                                     max_samples=in_args.valid_batches_per_epoch * in_args.valid_batch_size)
+    train(in_args,
+          in_model,
+          in_tokenizer,
+          in_optimizer,
+          trn_loader,
+          trn_sampler,
+          val_loader,
+          val_sampler,
+          save=False,
+          amp=amp)
+
+
+def main(args):
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__file__)
+    logger.info(pformat(args))
+
+    # Initialize distributed training if needed
+    args.distributed = (args.local_rank != -1)
+    if args.distributed:
+        torch.cuda.set_device(args.local_rank)
+        args.device = torch.device("cuda", args.local_rank)
+        torch.distributed.init_process_group(backend='nccl')
+
+    if args.model_checkpoint == "":
+        args.model_checkpoint = download_pretrained_model()
+
+    random.seed(args.seed)
+    torch.random.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+
+    logger.info("Get pretrained model and tokenizer")
+    tokenizer_class = GPT2Tokenizer
+    tokenizer = tokenizer_class.from_pretrained(args.base_model_checkpoint)
+    tokenizer.add_special_tokens(SPECIAL_TOKENS)
+
+    model_class = GPT2DoubleHeadsModel
+    model = model_class.from_pretrained(args.base_model_checkpoint)
+    model.to(args.device)
+    optimizer = AdamW(model.parameters(), lr=args.lr)
+
+    # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
+    amp_handle = None
+    if args.fp16:
+        from apex import amp  # Apex is only required if we use fp16 training
+        amp_handle = amp
+        model, optimizer = amp_handle.initialize(model, optimizer, opt_level=args.fp16)
+    if args.distributed:
+        model = DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+    else:
+        transformer_encoder = DataParallel(model.transformer)
+        model = DataParallel(model)
+    meta_weights: OrderedDict = OrderedDict()
+    state_dict = model.state_dict()
+    for name, param in state_dict.items():
+        meta_weights[name] = param.clone().detach()
+    meta_weights._metadata = copy.deepcopy(state_dict._metadata)
+
+    testspec_splits = {}
+    with open(args.testspec) as testspec_in:
+        for line in testspec_in:
+            line_json = json.loads(line)
+            assert line_json['target_dlg'] not in testspec_splits
+            testspec_splits[line_json['target_dlg']] = line_json
+
+    # selecting all domains
+    test_domains = PartitionSpec.from_paths(set([f for f in ZipFile(args.dataset_zip, 'r').namelist()
+                                                 if f.startswith('dialogues/') and f.endswith('.txt')]))
+    for domain_name, partition_spec in test_domains.iterate_paths():
+        domain_name_simplified = NLGEvalOutput._domain_name(domain_name)
+        if len(args.domain_names) and domain_name_simplified not in args.domain_names:
+            logger.info('Skipping domain {}'.format(domain_name_simplified))
+            continue
+        domain_dialogues = load_metalwoz_dialogues(tokenizer,
+                                                   args.dataset_zip,
+                                                   args,
+                                                   filenames=[domain_name],
+                                                   dataset_cache=None)
+        with NLGEvalOutput(os.path.join(env_utils.OUTPUT_DIR, args.output_dir), domain_name) as nlgeval:
+            for dialogue in domain_dialogues:
+                dialogue_id = dialogue['id']
+                if dialogue_id not in testspec_splits:
+                    continue
+                spec = testspec_splits[dialogue_id]
+
+                supset = [dlg for dlg in domain_dialogues if dlg['id'] in spec['support_dlgs']]
+                assert len(supset) == len(spec['support_dlgs'])
+
+                if args.fine_tune:
+                    model.load_state_dict(meta_weights)
+                    optimizer.lr = args.lr
+
+                    fine_tune(model, tokenizer, optimizer, supset, args, amp=amp_handle)
+
+                if args.local_rank in [0, -1]:
+                    turn_to_predict = spec['predict_turn']
+                    target_dlg_history = dialogue['turns'][:turn_to_predict]
+                    target_dlg_history = target_dlg_history[-(args.max_history * 2 - 1):]
+                    support_contexts, support_responses = [], []
+                    for support_dialogue in supset:
+                        if not turn_to_predict < len(support_dialogue['turns']):
+                            continue
+                        support_dlg_history = support_dialogue['turns'][:turn_to_predict]
+                        support_dlg_history = support_dlg_history[-(args.max_history * 2 - 1):]
+                        support_response = support_dialogue['turns'][turn_to_predict]
+                        support_contexts.append(support_dlg_history)
+                        support_responses.append(support_response)
+                    with torch.no_grad():
+                        out_ids = generate_and_rank(support_contexts,
+                                                    support_responses,
+                                                    target_dlg_history,
+                                                    tokenizer,
+                                                    model,
+                                                    transformer_encoder,
+                                                    args)
+                    print_prediction(dialogue, out_ids, tokenizer, spec['predict_turn'], nlgeval)
+
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument("dataset_zip", type=str, help="Path to the dataset zipfile")
+    parser.add_argument("testspec", type=str, help="Json dialogue/turn IDs to predict")
+    parser.add_argument("output_dir", type=str, help="Output directory")
+    parser.add_argument("base_model_checkpoint",
+                        type=str,
+                        help="Base model to be loaded - NOT for saving training progress")
+    parser.add_argument("model_checkpoint",
+                        type=str,
+                        help="Path to the resulting model")
+    parser.add_argument("--domain_names", type=str, nargs='*', default=[], help="Domains to process (all by default)")
+    parser.add_argument("--dataset_fold", type=str, default='test', help="Fold to evaluate on: train/validation/test")
+    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    parser.add_argument("--support_dev_ratio",
+                        type=float,
+                        default=0.1,
+                        help="Ratio of support dialogues used for evaluation of fine-tuning")
+    parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
+    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
+    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
+    parser.add_argument("--n_epochs", type=int, default=1, help="Fine-tuning epochs number for every support set")
+    parser.add_argument("--model_name", type=str, default="gpt2", help="gpt2/gpt2-medium, gpt2-large")
+    parser.add_argument("--max_history",
+                        type=int,
+                        default=2,
+                        help="Number of previous bot/user exchanges to keep in history")
+    parser.add_argument("--max_utterance_length",
+                        type=int,
+                        default=30,
+                        help="Number of tokens per utterance")
+    parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
+    parser.add_argument("--gradient_accumulation_steps",
+                        type=int,
+                        default=4,
+                        help="Accumulate gradients on several steps")
+    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
+    parser.add_argument("--train_batches_per_epoch", type=int, default=0, help="0 is for the entire train set")
+    parser.add_argument("--valid_batches_per_epoch", type=int, default=0, help="0 is for the entire valid set")
+    parser.add_argument("--steps_per_checkpoint", type=int, default=0, help="0 is for per-epoch checkpointing")
+    parser.add_argument("--dataloader_num_workers",
+                        type=int,
+                        default=0,
+                        help="Number of workers for train/eval DataLoaders (0 for single-threaded)")
+    parser.add_argument("--early_stopping_after",
+                        type=int,
+                        default=5,
+                        help="Stopping after this number of epochs without improvement")
+    parser.add_argument("--eval_before_start",
+                        action='store_true',
+                        help="If true start with a first evaluation before training")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="Device (cuda or cpu)")
+    parser.add_argument("--distributed", type=bool, default=False)
+    parser.add_argument("--fp16",
+                        type=str,
+                        default="",
+                        help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
+    parser.add_argument("--local_rank",
+                        type=int,
+                        default=-1,
+                        help="Local rank for distributed training (-1: not distributed)")
+    parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
+    parser.add_argument("--fine_tune",
+                        action='store_true',
+                        help="Set to fine-tune the model the support set before each prediction")
+    parser.add_argument("--max_length", type=int, default=20, help="Maximum length of the output utterances")
+    parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
+    parser.add_argument("--seed", type=int, default=42, help="Seed")
+    parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
+    parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
+    parser.add_argument("--top_p", type=float, default=0.9,
+                        help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
+    return parser.parse_args()
+
+
+if __name__ == '__main__':
+    args = parse_args()
+    main(args)

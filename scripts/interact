@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+# # Copyright (c) 2019-present, HuggingFace Inc.
+# All rights reserved.
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
+import logging
+import random
+from argparse import ArgumentParser
+from pprint import pformat
+
+import torch
+
+from pytorch_transformers import GPT2LMHeadModel, GPT2Tokenizer
+from grtr.utils import SPECIAL_TOKENS, sample_sequence
+from grtr.utils import download_pretrained_model
+
+
+def run(args):
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__file__)
+    logger.info(pformat(args))
+
+    if args.model_checkpoint == "":
+        args.model_checkpoint = download_pretrained_model()
+
+    random.seed(args.seed)
+    torch.random.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+
+    logger.info("Get pretrained model and tokenizer")
+    tokenizer_class = GPT2Tokenizer
+    tokenizer = tokenizer_class.from_pretrained(args.model_checkpoint)
+    tokenizer.add_special_tokens(SPECIAL_TOKENS)
+    model_class = GPT2LMHeadModel
+    model = model_class.from_pretrained(args.model_checkpoint)
+
+    model.to(args.device)
+    model.eval()
+
+    history = []
+    while True:
+        raw_text = input(">>> ")
+        while not raw_text:
+            print('Prompt should not be empty!')
+            raw_text = input(">>> ")
+        history.append(tokenizer.encode(raw_text))
+        with torch.no_grad():
+            out_ids = sample_sequence(history, tokenizer, model, args)
+        history.append(out_ids)
+        history = history[-(2*args.max_history+1):]
+        out_text = tokenizer.decode(out_ids, skip_special_tokens=True)
+        print(out_text)
+
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument("dataset_zip", type=str, help="Path to the dataset zipfile")
+    parser.add_argument("dataspec", type=str, help="Dataspec json with train/eval/test split")
+    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    parser.add_argument("--model_checkpoint", type=str, default="", help="Path, url or short name of the model")
+    parser.add_argument("--max_history", type=int, default=2, help="Number of previous utterances to keep in history")
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="Device (cuda or cpu)")
+    parser.add_argument("--no_sample", action='store_true', help="Set to use greedy decoding instead of sampling")
+    parser.add_argument("--max_length", type=int, default=20, help="Maximum length of the output utterances")
+    parser.add_argument("--min_length", type=int, default=1, help="Minimum length of the output utterances")
+    parser.add_argument("--seed", type=int, default=42, help="Seed")
+    parser.add_argument("--temperature", type=int, default=0.7, help="Sampling softmax temperature")
+    parser.add_argument("--top_k", type=int, default=0, help="Filter top-k tokens before sampling (<=0: no filtering)")
+    parser.add_argument("--top_p", type=float, default=0.9,
+                        help="Nucleus filtering (top-p) before sampling (<=0.0: no filtering)")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    run(args)

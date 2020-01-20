@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+# Copyright (c) 2019-present, HuggingFace Inc.
+# All rights reserved. This source code is licensed under the BSD-style license found in the LICENSE file in the root directory of
+# this source tree.
+
+from tensorboard.compat import tf
+import logging
+from pprint import pformat
+from argparse import ArgumentParser
+from mldc.data.schema import DataSpec
+
+import torch
+import torch.cuda
+from torch.nn.parallel import DataParallel, DistributedDataParallel
+from pytorch_transformers import AdamW
+
+from grtr.utils import (SPECIAL_TOKENS,
+                        get_loader_for_dataset,
+                        load_metalwoz_dialogues,
+                        load_tokenizer_and_model)
+from grtr.train import train
+
+
+logger = logging.getLogger(__file__)
+# hack to allow tensorboard monitoring on philly
+delattr(tf.io.gfile.LocalFileSystem, 'append')
+
+
+def main(args):
+    # logging is set to INFO (resp. WARN) for main (resp. auxiliary) process.
+    # logger.info => log main process only, logger.warning => log all processes
+    logging.basicConfig(level=logging.INFO if args.local_rank in [-1, 0] else logging.WARN)
+    # This is a logger.warning: it will be printed by all distributed processes
+    logger.warning("Running process %d", args.local_rank)
+    logger.info("Arguments: %s", pformat(args))
+
+    # Initialize distributed training if needed
+    args.distributed = (args.local_rank != -1)
+    if args.distributed:
+        torch.cuda.set_device(args.local_rank)
+        args.device = torch.device("cuda", args.local_rank)
+        torch.distributed.init_process_group(backend='nccl')
+
+    logger.info("Prepare tokenizer, pretrained model and optimizer - add special tokens for fine-tuning")
+    tokenizer, model = load_tokenizer_and_model(args)
+    tokenizer.add_special_tokens(SPECIAL_TOKENS)
+    model.resize_token_embeddings(len(tokenizer))
+    model.to(args.device)
+    optimizer = AdamW(model.parameters(), lr=args.lr)
+
+    # Prepare model for FP16 and distributed training if needed (order is important, distributed should be the last)
+    if args.fp16:
+        from apex import amp  # Apex is only required if we use fp16 training
+        model, optimizer = amp.initialize(model, optimizer, opt_level=args.fp16)
+    if args.distributed:
+        model = DistributedDataParallel(model, device_ids=[args.local_rank], output_device=args.local_rank)
+    else:
+        model = DataParallel(model)
+
+    logger.info("Prepare datasets")
+
+    with open(args.dataspec) as dataspec_in:
+        dataspec = DataSpec.load(dataspec_in)
+    train_paths, valid_paths, _ = dataspec.unpack_paths()
+    train_dataset = load_metalwoz_dialogues(tokenizer, args.dataset_zip, args, filenames=train_paths)
+    valid_dataset = load_metalwoz_dialogues(tokenizer, args.dataset_zip, args, filenames=valid_paths)
+
+    train_loader, train_sampler = get_loader_for_dataset(train_dataset,
+                                                         tokenizer,
+                                                         args.max_history,
+                                                         args.num_candidates,
+                                                         args.train_batch_size,
+                                                         distributed=args.distributed)
+    valid_loader, valid_sampler = get_loader_for_dataset(valid_dataset,
+                                                         tokenizer,
+                                                         args.max_history,
+                                                         args.num_candidates,
+                                                         args.train_batch_size,
+                                                         distributed=args.distributed)
+    train(args, model, tokenizer, optimizer, train_loader, train_sampler, valid_loader, valid_sampler)
+
+
+def parse_args():
+    parser = ArgumentParser()
+    parser.add_argument("dataset_zip", type=str, help="Path to the dataset zipfile")
+    parser.add_argument("dataspec", type=str, help="Dataspec json with train/eval/test split")
+    parser.add_argument("--dataset_cache", type=str, default='./dataset_cache', help="Path or url of the dataset cache")
+    parser.add_argument("model_checkpoint",
+                        type=str,
+                        default="",
+                        help="Path to the saved model. Will save to tensorboard's default dir by default")
+    parser.add_argument("--model_name", type=str, default="gpt2", help="gpt2/gpt2-medium/gpt2-large")
+    parser.add_argument("--num_candidates", type=int, default=2, help="Number of candidates for training")
+    parser.add_argument("--max_history",
+                        type=int,
+                        default=3,
+                        help="Number of previous bot+user exchanges to keep in history")
+    parser.add_argument("--max_utterance_length",
+                        type=int,
+                        default=30,
+                        help="Number of tokens per utterance")
+    parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
+    parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
+    parser.add_argument("--steps_per_checkpoint", type=int, default=0, help="0 is for per-epoch checkpointing")
+    parser.add_argument("--dataloader_num_workers",
+                        type=int,
+                        default=0,
+                        help="Number of workers for train/eval DataLoaders (0 for single-threaded)")
+    parser.add_argument("--gradient_accumulation_steps",
+                        type=int,
+                        default=4,
+                        help="Accumulate gradients on several steps")
+    parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
+    parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
+    parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
+    parser.add_argument("--max_norm", type=float, default=1.0, help="Clipping gradient norm")
+    parser.add_argument("--n_epochs", type=int, default=10, help="Number of training epochs")
+    parser.add_argument("--early_stopping_after",
+                        type=int,
+                        default=5,
+                        help="Stopping after this number of epochs without improvement")
+    parser.add_argument("--eval_before_start",
+                        action='store_true',
+                        help="If true start with a first evaluation before training")
+    parser.add_argument("--device",
+                        type=str,
+                        default="cuda" if torch.cuda.is_available() else "cpu",
+                        help="Device (cuda or cpu)")
+    parser.add_argument("--fp16",
+                        type=str,
+                        default="",
+                        help="Set to O0, O1, O2 or O3 for fp16 training (see apex documentation)")
+    parser.add_argument("--local_rank",
+                        type=int,
+                        default=-1,
+                        help="Local rank for distributed training (-1: not distributed)")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    main(args)

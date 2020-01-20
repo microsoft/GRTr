@@ -1,0 +1,14 @@
+name: dialogue_mi
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - cython
+  - python=3.7.5
+  - cudatoolkit=10.0
+  - pytorch=1.3.1
+  - torchvision=0.4.2
+  - pip:
+    - pytorch-transformers==1.2.0
+    - 'mldc@git+https://github.com/microsoft/dstc8-meta-dialog.git@28b0406c28806e97093b0c3d6391ce48e1d16261'
+    - tb-nightly
