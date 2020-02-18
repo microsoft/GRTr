@@ -8,7 +8,7 @@ OUTPUT_DIR="${MODEL}_metalwoz_pure_gen"
 
 ALL_DOMAINS=( "BOOKING_FLIGHT" "HOTEL_RESERVE" "TOURISM" "VACATION_IDEAS" )
 MAX_HISTORY=3
-FP16='' # --fp16 01
+FP16='' # --fp16 O1
 BATCH_SIZE="16"
 
 for domain in "${ALL_DOMAINS[@]}"; do

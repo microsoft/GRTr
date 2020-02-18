@@ -8,10 +8,10 @@ OUTPUT_DIR="${MODEL}_multiwoz_gen_rank_finetuned"
 
 ALL_DOMAINS=( "attraction" "hospital" "hotel" "police" "restaurant" "taxi" "train" )
 MAX_HISTORY=3
-FP16='' # --fp16 01
+FP16='' # --fp16 O1
 BATCH_SIZE="16"
 
-# prediction done with batch size 16 on 4 P100s with `--fp 01`
+# prediction done with batch size 16 on 4 P100s with `--fp O1`
 
 for domain in "${ALL_DOMAINS[@]}"; do
   python ./scripts/predict_generate_and_rank $ZIPFILE $TESTSPEC $OUTPUT_DIR $MODEL $OUTPUT_DIR/.model --fine_tune --train_batch_size $BATCH_SIZE --valid_batch_size $BATCH_SIZE --max_history $MAX_HISTORY $FP16 --domain_names $domain

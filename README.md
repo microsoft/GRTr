@@ -1,15 +1,21 @@
 **GRTr**: **G**enerative-**R**etrieval **Tr**ansformers
 ==
 
-Code for the paper: [Igor Shalyminov](https://ishalyminov.github.io/), [Alessandro Sordoni](https://www.microsoft.com/en-us/research/people/alsordon/), [Adam Atkinson](https://www.microsoft.com/en-us/research/people/adatkins/), [Hannes Schulz](https://www.microsoft.com/en-us/research/people/haschulz/). "Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation".
+Code for the paper ["Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation"](https://drive.google.com/file/d/19ifYuZofZMslocQzhICgGXTHFk90b58f/view).
+
+By [Igor Shalyminov](https://ishalyminov.github.io/), [Alessandro Sordoni](https://www.microsoft.com/en-us/research/people/alsordon/), [Adam Atkinson](https://www.microsoft.com/en-us/research/people/adatkins/), [Hannes Schulz](https://www.microsoft.com/en-us/research/people/haschulz/). 
 
 Installation
 ------------
 
-```
+```bash
 $ cd code-directory
-$ conda create -n grtr python=3.7 cython
-$ conda activate grtr
+$ git submodule init
+$ git submodule update
+$ conda create -n hybrid_retgen python=3.7
+$ conda activate hybrid_retgen
+$ conda install cython
+$ pip install -e ./dstc8-metalearn-baseline
 $ pip install -e .
 ```
 
@@ -23,24 +29,29 @@ Training a base GPT-2 model on MetaLWOz
 --------
 
 ```bash
-$ python scripts/train ~/data/blobfuse/mldc/metalwoz/dataset/metalwoz-v1.zip ~/data/blobfuse/mldc/metalwoz_dataspec.json --dataset_cache cache exp/grtr --train_batch_size 4 --valid_batch_size 4 --early_stopping_after -1 --n_epochs 25
+$ python scripts/train <MetaLWOz zipfile> metalwoz_dataspec.json --dataset_cache cache exp/grtr --train_batch_size 4 --valid_batch_size 4 --early_stopping_after -1 --n_epochs 25
 ```
+
+Add `--fp16 O1` to use mixed precision training.
 
 Predictions
 -----------
 
-- generate-and-rank
+### generate-and-rank
 
 ```sh
 python scripts/predict_generate_and_rank <MetaLWOz/MultiWoz zipfile> <testspec json> <output dir> <base GPT-2 model dir> --fine-tune --dataset_cache cache exp/grtr --train_batch_size 4 --valid_batch_size 4
 ```
 
-- generate only
+### generate only
 
 ```sh
 python scripts/predict <MetaLWOz/MultiWoz zipfile> <testspec json> <output dir> <base GPT-2 model dir> --fine-tune --dataset_cache cache exp/grtr --train_batch_size 4 --valid_batch_size 4
 ```
 
+Convenience `bash` scripts are provided in `scripts/` to produce predictions for each of the three test specs.
+
+Evaluation can be done using the [evaluate script](https://github.com/microsoft/dstc8-meta-dialog/blob/master/scripts/evaluate) in the competition baseline repository.
 
 ## Contributing
 

@@ -8,7 +8,7 @@ OUTPUT_DIR="${MODEL}_multiwoz_gen"
 
 ALL_DOMAINS=( "attraction" "hospital" "hotel" "police" "restaurant" "taxi" "train" )
 MAX_HISTORY=3
-FP16='' # --fp16 01
+FP16='' # --fp16 O1
 BATCH_SIZE="16"
 
 for domain in "${ALL_DOMAINS[@]}"; do
