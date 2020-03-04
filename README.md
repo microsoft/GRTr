@@ -1,9 +1,11 @@
 **GRTr**: **G**enerative-**R**etrieval **Tr**ansformers
 ==
 
-Code for the paper ["Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation"](https://drive.google.com/file/d/19ifYuZofZMslocQzhICgGXTHFk90b58f/view).
+Code for the paper ["Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation"](https://arxiv.org/abs/2003.01680) [[slides](https://drive.google.com/open?id=1YYxBoXJz7-AxyOUS4L1slOTf8wOVlE0n)].
 
 By [Igor Shalyminov](https://ishalyminov.github.io/), [Alessandro Sordoni](https://www.microsoft.com/en-us/research/people/alsordon/), [Adam Atkinson](https://www.microsoft.com/en-us/research/people/adatkins/), [Hannes Schulz](https://www.microsoft.com/en-us/research/people/haschulz/). 
+
+![Model diagram](./img/grtr.png)
 
 Installation
 ------------
@@ -24,7 +26,13 @@ For mixed precision training:
 ```bash
 $ pip install git+https://github.com/nvidia/apex
 ```
- 
+
+Datasets and experimental setup
+--------
+
+- [MetaLWOz](https://www.microsoft.com/en-us/research/project/metalwoz/) [[paper](https://www.microsoft.com/en-us/research/publication/multi-domain-task-completion-dialog-challenge/)]
+- [baselines and task info](https://github.com/microsoft/dstc8-meta-dialog)
+
 Training a base GPT-2 model on MetaLWOz
 --------
 
