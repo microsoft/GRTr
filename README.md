@@ -12,12 +12,9 @@ Installation
 
 ```bash
 $ cd code-directory
-$ git submodule init
-$ git submodule update
 $ conda create -n hybrid_retgen python=3.7
 $ conda activate hybrid_retgen
 $ conda install cython
-$ pip install -e ./dstc8-metalearn-baseline
 $ pip install -e .
 ```
 
