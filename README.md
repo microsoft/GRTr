@@ -1,7 +1,11 @@
 **GRTr**: **G**enerative-**R**etrieval **Tr**ansformers
 ==
 
-Code for the paper ["Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation"](https://arxiv.org/abs/2003.01680) [[slides](https://drive.google.com/open?id=1YYxBoXJz7-AxyOUS4L1slOTf8wOVlE0n)].
+Codebase for the papers:
+
+[Hybrid Generative-Retrieval Transformers for Dialogue Domain Adaptation](https://arxiv.org/abs/2003.01680), DSTC8@AAAI 2020
+
+[Fast Domain Adaptation for Goal-Oriented Dialogue Using a Hybrid Generative-Retrieval Transformer](https://ieeexplore.ieee.org/document/9053599), ICASSP 2020 [[virtual presentation](https://2020.ieeeicassp-virtual.org/presentation/poster/fast-domain-adaptation-goal-oriented-dialogue-using-hybrid-generative-retrieval)]
 
 By [Igor Shalyminov](https://ishalyminov.github.io/), [Alessandro Sordoni](https://www.microsoft.com/en-us/research/people/alsordon/), [Adam Atkinson](https://www.microsoft.com/en-us/research/people/adatkins/), [Hannes Schulz](https://www.microsoft.com/en-us/research/people/haschulz/). 
 
