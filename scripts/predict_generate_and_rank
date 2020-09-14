@@ -60,16 +60,14 @@ def fine_tune(in_model, in_tokenizer, in_optimizer, in_support_set, in_args, amp
                                                      in_args.num_candidates,
                                                      in_args.train_batch_size,
                                                      in_args.dataloader_num_workers,
-                                                     in_args.distributed,
-                                                     max_samples=in_args.train_batches_per_epoch * in_args.train_batch_size)
+                                                     in_args.distributed)
     val_loader, val_sampler = get_loader_for_dataset(validset,
                                                      in_tokenizer,
                                                      in_args.max_history,
                                                      in_args.num_candidates,
                                                      in_args.valid_batch_size,
                                                      in_args.dataloader_num_workers,
-                                                     in_args.distributed,
-                                                     max_samples=in_args.valid_batches_per_epoch * in_args.valid_batch_size)
+                                                     in_args.distributed)
     train(in_args,
           in_model,
           in_tokenizer,
@@ -227,8 +225,6 @@ def parse_args():
                         help="Accumulate gradients on several steps")
     parser.add_argument("--train_batch_size", type=int, default=4, help="Batch size for training")
     parser.add_argument("--valid_batch_size", type=int, default=4, help="Batch size for validation")
-    parser.add_argument("--train_batches_per_epoch", type=int, default=0, help="0 is for the entire train set")
-    parser.add_argument("--valid_batches_per_epoch", type=int, default=0, help="0 is for the entire valid set")
     parser.add_argument("--steps_per_checkpoint", type=int, default=0, help="0 is for per-epoch checkpointing")
     parser.add_argument("--dataloader_num_workers",
                         type=int,
