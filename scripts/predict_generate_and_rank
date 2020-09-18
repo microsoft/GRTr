@@ -146,6 +146,7 @@ def main(args):
                                                    args,
                                                    filenames=[domain_name],
                                                    dataset_cache=None)
+        encodings_cache = {}
         with NLGEvalOutput(os.path.join(env_utils.OUTPUT_DIR, args.output_dir), domain_name) as nlgeval:
             for dialogue in domain_dialogues:
                 dialogue_id = dialogue['id']
@@ -161,8 +162,8 @@ def main(args):
                     optimizer.lr = args.lr
 
                     fine_tune(model, tokenizer, optimizer, supset, args, amp=amp_handle)
+                    encodings_cache = {}
 
-                encodings_cache = {}
                 if args.local_rank in [0, -1]:
                     turn_to_predict = spec['predict_turn']
                     ret_window = (turn_to_predict - args.retrieval_window // 2,
@@ -174,9 +175,9 @@ def main(args):
                         for sup_turn_to_predict in range(ret_window[0], ret_window[1] + 1):
                             if not sup_turn_to_predict < len(support_dialogue['turns']):
                                 continue
-                            support_dlg_history = support_dialogue['turns'][:turn_to_predict]
+                            support_dlg_history = support_dialogue['turns'][:sup_turn_to_predict]
                             support_dlg_history = support_dlg_history[-(args.max_history * 2 - 1):]
-                            support_response = support_dialogue['turns'][turn_to_predict]
+                            support_response = support_dialogue['turns'][sup_turn_to_predict]
                             support_contexts.append(support_dlg_history)
                             support_responses.append(support_response)
                     with torch.no_grad():
