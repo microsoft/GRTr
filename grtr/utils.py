@@ -366,17 +366,35 @@ def sample_sequence(history, tokenizer, model, args, current_output=None):
     return current_output
 
 
-def generate_and_rank(support_contexts, support_responses, target_context, tokenizer, model, encoder, args, ret_winner=False):
+def generate_and_rank(support_contexts,
+                      support_responses,
+                      target_context,
+                      tokenizer,
+                      model,
+                      encoder,
+                      args,
+                      ret_winner=False,
+                      encodings_cache={}):
     generated = sample_sequence(target_context, tokenizer, model, args)
     winner = 'generated'
     if not len(support_contexts):
         return (generated, winner) if ret_winner else generated
-    target_context_emb = embed_dialogue(target_context, [], tokenizer, encoder, args)
+    target_context_emb = embed_dialogue(target_context,
+                                        None,
+                                        tokenizer,
+                                        encoder,
+                                        args,
+                                        encodings_cache=encodings_cache)
 
     num_ret_candidates = args.num_candidates - 1
     candidates_heap = []
     for idx, support_context in enumerate(support_contexts):
-        support_context_emb = embed_dialogue(support_context, None, tokenizer, encoder, args)
+        support_context_emb = embed_dialogue(support_context,
+                                             None,
+                                             tokenizer,
+                                             encoder,
+                                             args,
+                                             encodings_cache=encodings_cache)
         distance = target_context_emb.dist(support_context_emb)
         if len(candidates_heap) < num_ret_candidates:
             heappush(candidates_heap, (-distance, idx))
@@ -400,10 +418,7 @@ def generate_and_rank(support_contexts, support_responses, target_context, token
         ret_instances.append(ret_instance)
         candidates.append(support_responses[idx])
 
-    gen_instance, _ = build_input_from_segments(target_context,
-                                                generated,
-                                                tokenizer,
-                                                with_eos=True)
+    gen_instance, _ = build_input_from_segments(target_context, generated, tokenizer, with_eos=True)
     candidates.append(generated)
 
     data_point = defaultdict(list)
@@ -433,9 +448,14 @@ def generate_and_rank(support_contexts, support_responses, target_context, token
     return (candidates[arg_max], winner) if ret_winner else candidates[arg_max]
 
 
-def embed_dialogue(context, response, tokenizer, encoder, args):
+def embed_dialogue(context, response, tokenizer, encoder, args, encodings_cache={}):
     if response is None:
         response = []
+
+    dialogue_id = str(context + response).encode('utf-8')
+    if dialogue_id in encodings_cache:
+        logging.info('Encodings cache hit')
+        return encodings_cache[dialogue_id]
 
     instance, sequence = build_input_from_segments(context, response, tokenizer, with_eos=True)
     input_ids = torch.tensor(instance["input_ids"], device=args.device).unsqueeze(0)
@@ -448,6 +468,7 @@ def embed_dialogue(context, response, tokenizer, encoder, args):
     # shape of cls_index: (bsz, XX, 1, hidden_size) where XX are optional leading dim of hidden_states
     emb = emb.gather(-2, cls_index).squeeze(-2)  # shape (bsz, XX, hidden_size)
 
+    encodings_cache[dialogue_id] = emb
     return emb
 
 

@@ -162,19 +162,23 @@ def main(args):
 
                     fine_tune(model, tokenizer, optimizer, supset, args, amp=amp_handle)
 
+                encodings_cache = {}
                 if args.local_rank in [0, -1]:
                     turn_to_predict = spec['predict_turn']
+                    ret_window = (turn_to_predict - args.retrieval_window // 2,
+                                  turn_to_predict + (args.retrieval_window - 1) // 2)
                     target_dlg_history = dialogue['turns'][:turn_to_predict]
                     target_dlg_history = target_dlg_history[-(args.max_history * 2 - 1):]
                     support_contexts, support_responses = [], []
                     for support_dialogue in supset:
-                        if not turn_to_predict < len(support_dialogue['turns']):
-                            continue
-                        support_dlg_history = support_dialogue['turns'][:turn_to_predict]
-                        support_dlg_history = support_dlg_history[-(args.max_history * 2 - 1):]
-                        support_response = support_dialogue['turns'][turn_to_predict]
-                        support_contexts.append(support_dlg_history)
-                        support_responses.append(support_response)
+                        for sup_turn_to_predict in range(ret_window[0], ret_window[1] + 1):
+                            if not sup_turn_to_predict < len(support_dialogue['turns']):
+                                continue
+                            support_dlg_history = support_dialogue['turns'][:turn_to_predict]
+                            support_dlg_history = support_dlg_history[-(args.max_history * 2 - 1):]
+                            support_response = support_dialogue['turns'][turn_to_predict]
+                            support_contexts.append(support_dlg_history)
+                            support_responses.append(support_response)
                     with torch.no_grad():
                         out_ids = generate_and_rank(support_contexts,
                                                     support_responses,
@@ -182,7 +186,8 @@ def main(args):
                                                     tokenizer,
                                                     model,
                                                     transformer_encoder,
-                                                    args)
+                                                    args,
+                                                    encodings_cache=encodings_cache)
                     print_prediction(dialogue, out_ids, tokenizer, spec['predict_turn'], nlgeval)
 
 
@@ -204,6 +209,11 @@ def parse_args():
                         type=float,
                         default=0.1,
                         help="Ratio of support dialogues used for evaluation of fine-tuning")
+    parser.add_argument("--retrieval_window",
+                        type=int,
+                        default=5,
+                        help="Window of turns to consider as retrieval candidates"
+                        "(tgt_turn - window // 2, tgt_turn + (window - 1) // 2)")
     parser.add_argument("--lr", type=float, default=6.25e-5, help="Learning rate")
     parser.add_argument("--lm_coef", type=float, default=1.0, help="LM loss coefficient")
     parser.add_argument("--mc_coef", type=float, default=1.0, help="Multiple-choice loss coefficient")
