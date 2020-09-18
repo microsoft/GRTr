@@ -67,7 +67,7 @@ def evaluate(in_model, in_tokenizer, in_data_loader, args):
             lm_labels_flat_shifted = lm_labels[..., 1:].contiguous().view(-1)
             results = (lm_logits_flat_shifted, mc_logits), (lm_labels_flat_shifted, mc_labels)
             loss += loss_fn(results[0][0], results[1][0]) / len(in_data_loader)
-            batch_acc = ((mc_labels.eq(mc_logits.max(-1)[1])).sum()) / mc_labels.shape[0]
+            batch_acc = ((mc_labels.eq(mc_logits.max(-1)[1])).sum()) / float(mc_labels.shape[0])
             acc += batch_acc / len(in_data_loader)
     return {'loss': loss.item() if isinstance(loss, torch.Tensor) else loss,
             'acc': acc.item() if isinstance(loss, torch.Tensor) else acc}
