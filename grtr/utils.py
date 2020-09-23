@@ -453,10 +453,10 @@ def embed_dialogue(context, response, tokenizer, encoder, args, encodings_cache=
     if response is None:
         response = []
 
-    dialogue_id = hashlib.sha256(str(context + response).encode('utf-8')).digest()
+    dialogue_id = hashlib.sha256(str(context + ['|'] + response).encode('utf-8')).digest()
     if dialogue_id in encodings_cache:
         logging.info('Encodings cache hit')
-        logging.info(str(context + response) + ' --> ' + str(dialogue_id))
+        logging.info(str(context + ['|'] + response) + ' --> ' + str(dialogue_id))
         return encodings_cache[dialogue_id]
 
     instance, sequence = build_input_from_segments(context, response, tokenizer, with_eos=True)
