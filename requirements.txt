@@ -2,7 +2,7 @@ torch==1.3.1
 pytorch-ignite==0.2.0
 pytorch-transformers==1.2.0
 git+https://github.com/facebookresearch/pytext.git@8a73c72b0fa9296ee3e50479466df633c878742c
-pydantic==0.32.2
+pydantic==1.6.2
 fasttext==0.8.4
 iterable-queue==1.2.2
 tabulate==0.8.3
