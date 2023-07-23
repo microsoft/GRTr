@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 from grtr import __version__
 
 INSTALL_REQUIRES = [
-    'torch==1.3.1',
+    'torch==1.13.1',
     'pytorch-transformers==1.2.0',
     'mldc@git+https://github.com/microsoft/dstc8-meta-dialog.git@28b0406c28806e97093b0c3d6391ce48e1d16261',
     'tb-nightly',
